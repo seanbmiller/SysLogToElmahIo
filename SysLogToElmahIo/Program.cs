@@ -9,8 +9,10 @@ using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
+using Elmah.Io.Client;
 using Newtonsoft.Json;
 using NLog;
+using Logger = NLog.Logger;
 
 namespace SysLogToElmahIo
 {
@@ -35,7 +37,7 @@ namespace SysLogToElmahIo
             var eventRecordId = args[0];
 
             // query the event record id from the event log reader
-            string eventLogData = null;
+            EventRecord @event = null;
             try
             {
                 EventLogQuery query = new EventLogQuery("Application", PathType.LogName, ConfigurationManager.AppSettings["EventLogXmlPath"].Expand(eventRecordId));
@@ -47,7 +49,8 @@ namespace SysLogToElmahIo
                     logger.Log(LogLevel.Debug, "EventRecordID:{0}", eventRecord.RecordId.ToString());
                     if (eventRecord.RecordId.Value == Int32.Parse(eventRecordId))
                     {
-                        eventLogData = eventRecord.ToXml();
+                        @event = eventRecord;
+                        var eventLogData = eventRecord.ToXml();
                         logger.Log(LogLevel.Debug, eventLogData);
                     }
                 }
@@ -58,43 +61,63 @@ namespace SysLogToElmahIo
                 throw;
             }
             
-            if (eventLogData == null)
+            if (@event == null)
             {
-                logger.Log(LogLevel.Debug, "Event Log Data was null");
+                logger.Log(LogLevel.Debug, "Event was null");
                 return;
             }
 
+            var message = EventToMessage(@event);
+            var elmahClient = Elmah.Io.Client.Logger.Create(new Guid(ConfigurationManager.AppSettings["ElmahIoLogId"]));
+            elmahClient.OnMessage += (sender, eventArgs) => logger.Log(LogLevel.Info, "Successfully imported event to elmah.io");
+            elmahClient.OnMessageFail += (sender, eventArgs) => logger.Log(LogLevel.Error, eventArgs.Error);
+            elmahClient.Log(message);
+        }
 
-            //build an api call to elmah.io
-            XmlDocument doc = new XmlDocument();
-            doc.LoadXml(eventLogData);
-            string jsonText = JsonConvert.SerializeXmlNode(doc);
-
-            var createError = new
+        private static Message EventToMessage(EventRecord @event)
+        {
+            var message = new Message(@event.FormatDescription())
             {
-                title = jsonText
+                Severity = Level(@event.LevelDisplayName),
+                DateTime = @event.TimeCreated ?? DateTime.UtcNow,
+                Source = @event.LogName,
+                Hostname = @event.MachineName,
+                User = @event.UserId.Value,
+                Data = Data(@event.Properties),
+                Detail = System.Security.SecurityElement.Escape(@event.ToXml()),
             };
-            
-            try
-            {
-                var request = (HttpWebRequest)WebRequest.Create(ConfigurationManager.AppSettings["ElmahIoLogUrl"] + ConfigurationManager.AppSettings["ElmahIoLogId"]);
-                request.Method = "POST";
-                request.ContentType = "application/x-www-form-urlencoded";
-                var createErrorString = JsonConvert.SerializeObject(createError);
-                var bytes = Encoding.UTF8.GetBytes(createErrorString);
-                request.ContentLength = bytes.Length;
-                request.ContentType = "application/json";
-                var outputStream = request.GetRequestStream();
-                outputStream.Write(bytes, 0, bytes.Length);
-                HttpWebResponse response = (HttpWebResponse)request.GetResponse();
-                logger.Log(LogLevel.Debug, "Status: " + response.StatusDescription);
-                logger.Log(LogLevel.Debug, "ResponseUri: " + response.ResponseUri);
+
+            return message;
+        }
+
+        private static List<Item> Data(IList<EventProperty> properties)
+        {
+            return properties
+                .Select((t, i) => new Item
+                {
+                    Key = "Property" + (1 + i),
+                    Value = t.Value.ToString()
+                })
+                .ToList();
+        }
+
+        private static Severity? Level(string level)
+        {
+            if (string.IsNullOrWhiteSpace(level)) return null;
+            switch(level) {
+                case "Critical":
+                    return Severity.Fatal;
+                case "Error":
+                    return Severity.Error;
+                case "Informational":
+                    return Severity.Information;
+                case "Verbose":
+                    return Severity.Verbose;
+                case "Warning":
+                    return Severity.Warning;
             }
-            catch (Exception e)
-            {
-                logger.Log(LogLevel.Error, e);
-                throw;
-            }
+
+            return null;
         }
     }
 }
