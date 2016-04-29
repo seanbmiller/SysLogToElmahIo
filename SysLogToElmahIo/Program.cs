@@ -30,8 +30,8 @@ namespace SysLogToElmahIo
                 }
             }
             else
-            { 
-                logger.Log(LogLevel.Debug,"No EventID provided");
+            {
+                logger.Log(LogLevel.Debug, "No EventID provided");
                 return;
             }
             var eventRecordId = args[0];
@@ -60,7 +60,7 @@ namespace SysLogToElmahIo
                 logger.Log(LogLevel.Error, e);
                 throw;
             }
-            
+
             if (@event == null)
             {
                 logger.Log(LogLevel.Debug, "Event was null");
@@ -76,18 +76,33 @@ namespace SysLogToElmahIo
 
         private static Message EventToMessage(EventRecord @event)
         {
-            var message = new Message(@event.FormatDescription())
+            if (@event.UserId != null)
             {
-                Severity = Level(@event.LevelDisplayName),
-                DateTime = @event.TimeCreated ?? DateTime.UtcNow,
-                Source = @event.LogName,
-                Hostname = @event.MachineName,
-                User = @event.UserId.Value,
-                Data = Data(@event.Properties),
-                Detail = System.Security.SecurityElement.Escape(@event.ToXml()),
-            };
-
-            return message;
+                var message = new Message(@event.FormatDescription())
+                {
+                    Severity = Level(@event.LevelDisplayName),
+                    DateTime = @event.TimeCreated ?? DateTime.UtcNow,
+                    Source = @event.LogName,
+                    Hostname = @event.MachineName,
+                    User = @event.UserId.Value,
+                    Data = Data(@event.Properties),
+                    Detail = System.Security.SecurityElement.Escape(@event.ToXml()),
+                };
+                return message;
+            }
+            else
+            {
+                var message = new Message(@event.FormatDescription())
+                {
+                    Severity = Level(@event.LevelDisplayName),
+                    DateTime = @event.TimeCreated ?? DateTime.UtcNow,
+                    Source = @event.LogName,
+                    Hostname = @event.MachineName,
+                    Data = Data(@event.Properties),
+                    Detail = System.Security.SecurityElement.Escape(@event.ToXml()),
+                };
+                return message;
+            }
         }
 
         private static List<Item> Data(IList<EventProperty> properties)
@@ -104,7 +119,8 @@ namespace SysLogToElmahIo
         private static Severity? Level(string level)
         {
             if (string.IsNullOrWhiteSpace(level)) return null;
-            switch(level) {
+            switch (level)
+            {
                 case "Critical":
                     return Severity.Fatal;
                 case "Error":
